@@ -156,8 +156,7 @@
             this.btnPickColor.TabStop = false;
             this.tooltip.SetToolTip(this.btnPickColor, global::ColorPicker.Properties.Resources.PickText);
             this.btnPickColor.UseVisualStyleBackColor = false;
-            this.btnPickColor.MouseDown += new System.Windows.Forms.MouseEventHandler(this.btnPickColor_MouseDown);
-            this.btnPickColor.MouseUp += new System.Windows.Forms.MouseEventHandler(this.btnPickColor_MouseUp);
+            this.btnPickColor.Click += new System.EventHandler(this.btnAutoReadColour_Click);
             // 
             // chkPin
             // 

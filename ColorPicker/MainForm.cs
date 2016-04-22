@@ -11,7 +11,6 @@ namespace ColorPicker
 
     public partial class MainForm : Form
     {
-        private Screen screen;
         private readonly Timer getColor;
         private bool txtHexFullBlocked = false;
         private bool txtHexShortBlocked = false;
@@ -27,7 +26,7 @@ namespace ColorPicker
             set
             {
                 _sampleColor = value;
-                this.BackColor = _sampleColor;
+                this.btnPickColor.BackColor = _sampleColor;
             }
         }
         // Sample preview
@@ -41,6 +40,13 @@ namespace ColorPicker
         public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
         [DllImportAttribute("user32.dll")]
         public static extern bool ReleaseCapture();
+        [DllImport("user32.dll")]
+        static extern bool GetCursorPos(ref Point lpPoint);
+        [DllImport("gdi32.dll", CharSet = CharSet.Auto, SetLastError = true, ExactSpelling = true)]
+        public static extern int BitBlt(IntPtr hDC, int x, int y, int nWidth, int nHeight, IntPtr hSrcDC, int xSrc, int ySrc, int dwRop);
+
+        Bitmap screenPixel = new Bitmap(1, 1, PixelFormat.Format32bppArgb);
+        private bool autoGetColour;
 
         public MainForm()
         {
@@ -52,7 +58,7 @@ namespace ColorPicker
 
             // Setup get color timer
             getColor = new Timer { Interval = 10 };
-            getColor.Tick += new EventHandler(GetColorTick);
+            getColor.Tick += new EventHandler(GetColorOutOfAppTick);
 
             previewColors = new Color[previewSize, previewSize];
         }
@@ -63,44 +69,7 @@ namespace ColorPicker
         private void TranslateColor()
         {
             if (!hasSampled) return;
-
-            try
-            {
-                string htmlColor = ColorTranslator.ToHtml(sampleColor);
-                htmlColor = htmlColor.StartsWith("#") ? htmlColor : htmlColor.ToLower();
-                if (!txtHexFullBlocked) txtHexFull.Text = htmlColor;
-                if (!txtHexShortBlocked) txtHexShort.Text = htmlColor.StartsWith("#") ? htmlColor.Substring(1) : htmlColor;
-
-                if (Properties.Settings.Default.UseFloat)
-                {
-                    string tmpR = (sampleColor.R / 255f).ToString("0.##f", CultureInfo.GetCultureInfo("en-us"));
-                    string tmpG = (sampleColor.G / 255f).ToString("0.##f", CultureInfo.GetCultureInfo("en-us"));
-                    string tmpB = (sampleColor.B / 255f).ToString("0.##f", CultureInfo.GetCultureInfo("en-us"));
-                    txtRgbShort.Text = string.Format("{0}, {1}, {2}", tmpR, tmpG, tmpB);
-                }
-                else
-                {
-                    txtRgbShort.Text = string.Format("{0}, {1}, {2}", sampleColor.R, sampleColor.G, sampleColor.B);
-                }
-            }
-            finally { }
-        }
-
-        /// <summary>
-        /// Returns the sample region.
-        /// </summary>
-        /// <param name="screen">Screen to sample from.</param>
-        /// <param name="mouseX">Mouse x position.</param>
-        /// <param name="mouseY">Mouse y position.</param>
-        /// <returns></returns>
-        private Bitmap GetSampleRegion(Screen screen, int mouseX, int mouseY)
-        {
-            var bmp = new Bitmap(sampleSize, sampleSize, PixelFormat.Format32bppArgb);
-            Graphics gfxScreenshot = Graphics.FromImage(bmp);
-            gfxScreenshot.CopyFromScreen(mouseX - sampleSize / 2, mouseY - sampleSize / 2, 0, 0, new Size(sampleSize, sampleSize));
-            gfxScreenshot.Save();
-            gfxScreenshot.Dispose();
-            return bmp;
+            UpdateColourText(sampleColor);
         }
 
         /// <summary>
@@ -122,6 +91,8 @@ namespace ColorPicker
         /// </summary>
         private void OpenColorChooserDialog()
         {
+            if (this.autoGetColour) return;
+
             var colorDialog = new ColorDialog { Color = sampleColor, FullOpen = true };
             if (colorDialog.ShowDialog() == DialogResult.OK)
             {
@@ -170,24 +141,6 @@ namespace ColorPicker
             }
         }
 
-        void GetColorTick(object sender, EventArgs e)
-        {
-            try
-            {
-                // Get color sample from screen
-                int mouseX = MousePosition.X;
-                int mouseY = MousePosition.Y;
-                screen = Screen.FromRectangle(new Rectangle(MousePosition.X, MousePosition.Y, 1, 1));
-                sampleBitmap = GetSampleRegion(screen, mouseX, mouseY);
-                Color newColor = sampleBitmap.GetPixel(sampleSize / 2, sampleSize / 2);
-                // Set color sample and update form
-                sampleColor = newColor;
-                TranslateColor();
-                if (this.BackColor == newColor) this.Invalidate(new Rectangle(previewX, previewY, previewSize, previewSize));
-            }
-            finally { }
-        }
-
         private void chkPin_CheckedChanged(object sender, EventArgs e)
         {
             this.TopMost = chkPin.Checked;
@@ -200,35 +153,10 @@ namespace ColorPicker
             OpenColorChooserDialog();
         }
 
-        private void btnPickColor_MouseDown(object sender, MouseEventArgs e)
-        {
-            getColor.Start();
-            var cv = new CursorConverter();
-            var cursor = (Cursor)cv.ConvertFrom(Properties.Resources.pipette);
-            if (!hasSampled)
-            {
-                btnPickColor.BackgroundImage = null;
-                hasSampled = true;
-            }
-            this.Cursor = cursor;
-        }
-
-        private void btnPickColor_MouseUp(object sender, MouseEventArgs e)
-        {
-            getColor.Stop();
-            this.Cursor = Cursors.Default;
-
-            // Clean up
-            if (sampleBitmap != null)
-            {
-                sampleBitmap.Dispose();
-                sampleBitmap = null;
-            }
-            System.GC.Collect();
-        }
-
         private void txtHexFull_TextChanged(object sender, EventArgs e)
         {
+            if (this.autoGetColour) return;
+
             if (txtHexFull.Text.Length == 7 && txtHexFull.Text.StartsWith("#"))
             {
                 sampleColor = ColorTranslator.FromHtml(txtHexFull.Text);
@@ -244,6 +172,8 @@ namespace ColorPicker
 
         private void txtHexShort_TextChanged(object sender, EventArgs e)
         {
+            if (this.autoGetColour) return;
+
             try
             {
                 if (txtHexShort.Text.Length == 6)
@@ -258,7 +188,7 @@ namespace ColorPicker
                     TranslateColor();
                 }
             }
-            catch (FormatException fex)
+            catch
             {
                 sampleColor = Color.Black;
                 TranslateColor();
@@ -314,12 +244,17 @@ namespace ColorPicker
             {
                 this.Close();
                 return true;
+            } else if(keyData == Keys.S)
+            {
+                this.ToggleAutoRead();
+                return true;
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
         private void contextFloat_Click(object sender, EventArgs e)
         {
+            if (this.autoGetColour) return;
             Properties.Settings.Default.UseFloat = true;
             Properties.Settings.Default.Save();
             TranslateColor();
@@ -327,9 +262,86 @@ namespace ColorPicker
 
         private void contextByte_Click(object sender, EventArgs e)
         {
+            if (this.autoGetColour) return;
             Properties.Settings.Default.UseFloat = false;
             Properties.Settings.Default.Save();
             TranslateColor();
+        }
+
+        public Color GetColorAt(Point location)
+        {
+            using (Graphics gdest = Graphics.FromImage(screenPixel))
+            {
+                using (Graphics gsrc = Graphics.FromHwnd(IntPtr.Zero))
+                {
+                    IntPtr hSrcDC = gsrc.GetHdc();
+                    IntPtr hDC = gdest.GetHdc();
+                    int retval = BitBlt(hDC, 0, 0, 1, 1, hSrcDC, location.X, location.Y, (int)CopyPixelOperation.SourceCopy);
+                    gdest.ReleaseHdc();
+                    gsrc.ReleaseHdc();
+                }
+            }
+
+            return screenPixel.GetPixel(0, 0);
+        }
+
+        void GetColorOutOfAppTick(object sender, EventArgs e)
+        {
+            try
+            {
+                Point cursor = new Point();
+                GetCursorPos(ref cursor);
+                var newColor = GetColorAt(cursor);
+                btnPickColor.BackColor = newColor;
+                UpdateColourText(newColor);
+            }
+            finally { }
+        }
+
+        private void UpdateColourText(Color newColor)
+        {
+            try
+            {
+                string htmlColor = ColorTranslator.ToHtml(newColor);
+                htmlColor = htmlColor.StartsWith("#") ? htmlColor : htmlColor.ToLower();
+                if (!txtHexFullBlocked) txtHexFull.Text = htmlColor;
+                if (!txtHexShortBlocked) txtHexShort.Text = htmlColor.StartsWith("#") ? htmlColor.Substring(1) : htmlColor;
+
+                if (Properties.Settings.Default.UseFloat)
+                {
+                    string tmpR = (newColor.R / 255f).ToString("0.##f", CultureInfo.GetCultureInfo("en-us"));
+                    string tmpG = (newColor.G / 255f).ToString("0.##f", CultureInfo.GetCultureInfo("en-us"));
+                    string tmpB = (newColor.B / 255f).ToString("0.##f", CultureInfo.GetCultureInfo("en-us"));
+                    txtRgbShort.Text = string.Format("{0}, {1}, {2}", tmpR, tmpG, tmpB);
+                }
+                else
+                {
+                    txtRgbShort.Text = string.Format("{0}, {1}, {2}", newColor.R, newColor.G, newColor.B);
+                }
+            }
+            catch { }
+        }
+
+        private void btnAutoReadColour_Click(object sender, EventArgs e)
+        {
+            ToggleAutoRead();
+        }
+
+        private void ToggleAutoRead()
+        {
+            if (this.autoGetColour)   // Changing from true to false
+            {   // User stopping auto get colours
+                getColor.Stop();
+                this.btnPickColor.BackColor = Color.Transparent;
+            }
+            else   // Changing from false to true;
+            {   // User starting auto get colours
+                getColor.Start();
+            }
+
+            System.GC.Collect();
+
+            this.autoGetColour = !this.autoGetColour;   // Done here to ensure other methods do not run first
         }
     }
 }
